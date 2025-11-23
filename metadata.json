@@ -1,0 +1,5 @@
+{
+  "name": "Quran Quiz",
+  "description": "Gim kuis interaktif pembelajaran Al-Quran dengan fitur lengkapi ayat, tebak surat, dan arti kata. Dilengkapi sistem skor dan nasihat bijak di akhir permainan.",
+  "requestFramePermissions": []
+}
