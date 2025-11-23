@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QuranQuest Embed</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Babel untuk membaca JSX di browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Import Map untuk Library External -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "@google/genai": "https://esm.sh/@google/genai@0.1.1"
+      }
+    }
+    </script>
+
+    <style>
+      body { font-family: 'Nunito', sans-serif; }
+      .font-arabic { font-family: 'Amiri', serif; }
+      ::-webkit-scrollbar { width: 8px; }
+      ::-webkit-scrollbar-track { background: #f1f1f1; }
+      ::-webkit-scrollbar-thumb { background: #10b981; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: #059669; }
+      @keyframes float {
+        0%, 100% { transform: translateY(0) rotate(0deg); }
+        50% { transform: translateY(-20px) rotate(5deg); }
+      }
+      .animate-float { animation: float 6s ease-in-out infinite; }
+      .delay-1000 { animation-delay: 1s; }
+      .delay-2000 { animation-delay: 2s; }
+      .delay-3000 { animation-delay: 3s; }
+      .delay-4000 { animation-delay: 4s; }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
+
+    <!-- SCRIPT UTAMA: GABUNGAN SEMUA LOGIC -->
+    <script type="text/babel" data-type="module">
+      import React, { useState, useEffect } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { GoogleGenAI, Type } from '@google/genai';
+      import { BookOpen, Search, Mic, Book, Grid, Volume2, VolumeX, CheckCircle, XCircle, Flag, Star, RefreshCw, Share2 } from 'lucide-react';
+
+      // ==========================================
+      // KONFIGURASI (EDIT DISINI)
+      // ==========================================
+      
+      const API_KEY = "PASTE_API_KEY_ANDA_DISINI"; 
+
+      // ==========================================
+      // 1. TIPE DATA & KONSTANTA
+      // ==========================================
+      
+      const QuestionType = {
+        GUESS_SURAH: 'GUESS_SURAH',
+        COMPLETE_VERSE: 'COMPLETE_VERSE',
+        TRANSLATE_WORD: 'TRANSLATE_WORD',
+        MATCHING: 'MATCHING',
+        GENERAL_KNOWLEDGE: 'GENERAL_KNOWLEDGE'
+      };
+
+      const ADVICE_LIST = [
+        "Sebaik-baik kalian adalah orang yang belajar Al-Qur'an dan mengajarkannya. (HR. Bukhari)",
+        "Bacalah Al-Qur'an, sesungguhnya ia akan datang pada hari kiamat memberikan syafaat bagi pembacanya. (HR. Muslim)",
+        "Hati yang tidak ada sedikitpun Al-Qur'an di dalamnya bagaikan rumah yang roboh. (HR. Tirmidzi)",
+        "Orang yang mahir membaca Al-Qur'an akan bersama para malaikat yang mulia dan taat. (HR. Muslim)",
+        "Allah mengangkat derajat beberapa kaum dengan Al-Qur'an ini dan merendahkan yang lain dengannya. (HR. Muslim)",
+        "Jadikanlah Al-Quran sebagai pedoman hidup, niscaya hidupmu akan terarah dan tenang.",
+        "Jangan lupa untuk murojaah hafalanmu, karena ilmu yang tidak dijaga akan mudah hilang.",
+        "Menghafal Al-Quran itu mudah bagi yang ikhlas, jagalah niatmu karena Allah.",
+        "Satu huruf yang dibaca dari Al-Quran mengandung sepuluh kebaikan.",
+        "Al-Quran adalah obat bagi hati yang gelisah dan penyejuk bagi jiwa yang gundah."
+      ];
+
+      // ==========================================
+      // 2. AUDIO SERVICE
+      // ==========================================
+
+      class AudioService {
+        constructor() {
+          this.audioContext = null;
+          this.isMuted = false;
+          try {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (AudioContextClass) this.audioContext = new AudioContextClass();
+          } catch (e) { console.error("Web Audio API not supported"); }
+        }
+
+        initContext() {
+          if (this.audioContext && this.audioContext.state === 'suspended') {
+            this.audioContext.resume();
+          }
+          if (!this.audioContext) {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (AudioContextClass) this.audioContext = new AudioContextClass();
+          }
+        }
+
+        toggleMute() {
+          this.isMuted = !this.isMuted;
+          return this.isMuted;
+        }
+
+        playTone(freq, type, duration, startTime = 0, vol = 0.1) {
+          if (this.isMuted || !this.audioContext) return;
+          this.initContext();
+          const osc = this.audioContext.createOscillator();
+          const gain = this.audioContext.createGain();
+          osc.type = type;
+          osc.frequency.setValueAtTime(freq, this.audioContext.currentTime + startTime);
+          gain.gain.setValueAtTime(vol, this.audioContext.currentTime + startTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + startTime + duration);
+          osc.connect(gain);
+          gain.connect(this.audioContext.destination);
+          osc.start(this.audioContext.currentTime + startTime);
+          osc.stop(this.audioContext.currentTime + startTime + duration);
+        }
+
+        playCorrect() {
+          this.playTone(523.25, 'sine', 0.3, 0, 0.1);
+          this.playTone(659.25, 'sine', 0.3, 0.1, 0.1);
+          this.playTone(783.99, 'sine', 0.6, 0.2, 0.1);
+        }
+
+        playWrong() {
+          this.playTone(150, 'sawtooth', 0.4, 0, 0.05);
+          this.playTone(140, 'sawtooth', 0.4, 0.1, 0.05);
+        }
+
+        playClick() {
+          this.playTone(800, 'triangle', 0.05, 0, 0.05);
+        }
+
+        playTick() {
+          this.playTone(600, 'sine', 0.1, 0, 0.1);
+        }
+
+        playWin() {
+          const now = 0;
+          this.playTone(523.25, 'square', 0.2, now, 0.05);
+          this.playTone(523.25, 'square', 0.2, now + 0.1, 0.05);
+          this.playTone(523.25, 'square', 0.2, now + 0.2, 0.05);
+          this.playTone(659.25, 'square', 0.6, now + 0.3, 0.05);
+          this.playTone(783.99, 'square', 0.6, now + 0.6, 0.05);
+        }
+      }
+
+      const audioService = new AudioService();
+
+      // ==========================================
+      // 3. GEMINI SERVICE
+      // ==========================================
+
+      const generateQuizQuestions = async (mode) => {
+        // Cek API Key
+        if (!API_KEY || API_KEY === "PASTE_API_KEY_ANDA_DISINI") {
+          alert("Mohon masukkan API Key Gemini Anda di dalam kode (Baris 55).");
+          return [];
+        }
+
+        const ai = new GoogleGenAI({ apiKey: API_KEY });
+        
+        let promptContext = "";
+        switch(mode) {
+          case 'TEBAK_SURAT': promptContext = "Focus strictly on 'GUESS_SURAH'. Show a verse (arabicText) and ask which Surah it belongs to."; break;
+          case 'LENGKAPI_AYAT': promptContext = "Focus strictly on 'COMPLETE_VERSE'. Provide verses with missing parts."; break;
+          case 'ILMU_TAJWID': promptContext = "Focus strictly on 'GENERAL_KNOWLEDGE'. Ask about Tajweed rules."; break;
+          case 'ARTI_KATA': promptContext = "Focus strictly on 'TRANSLATE_WORD'. Show Arabic word/phrase and ask for Indonesian translation."; break;
+        }
+
+        const timestamp = Date.now();
+        const uniqueSessionId = `${timestamp}-${Math.floor(Math.random() * 999999)}`;
+
+        const prompt = `
+          Create a fresh, unique Quran Quiz set of 5 questions.
+          Mode: ${mode}. Context: ${promptContext}. SESSION_ID: ${uniqueSessionId}.
+          Output strictly JSON matching this schema:
+          {
+            "questions": [
+              {
+                "id": "string",
+                "type": "string enum(GUESS_SURAH, COMPLETE_VERSE, TRANSLATE_WORD, GENERAL_KNOWLEDGE)",
+                "questionText": "string (Bahasa Indonesia)",
+                "points": number,
+                "difficultyLevel": number,
+                "arabicText": "string (optional)",
+                "options": ["string"],
+                "correctAnswer": "string",
+                "versePart1": "string (optional)",
+                "hiddenPart": "string (optional)",
+                "versePart2": "string (optional)"
+              }
+            ]
+          }
+          Ensure NO repetition and Randomized answers.
+        `;
+
+        try {
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              temperature: 1.0,
+            },
+          });
+
+          const data = JSON.parse(response.text || '{"questions": []}');
+          return data.questions.map(q => ({
+            ...q,
+            type: q.type, 
+            versePart1: q.versePart1 || '',
+            versePart2: q.versePart2 || '',
+            hiddenPart: q.hiddenPart || q.correctAnswer
+          }));
+
+        } catch (error) {
+          console.error("Error generating quiz:", error);
+          return [{
+            id: "err-fallback",
+            type: QuestionType.GUESS_SURAH,
+            questionText: "Mode Offline: Potongan ayat berikut terdapat dalam surat apa?",
+            points: 10,
+            difficultyLevel: 1,
+            arabicText: "إِنَّا أَعْطَيْنَاكَ الْكَوْثَرَ",
+            options: ["Al-Ikhlas", "Al-Kautsar", "Al-Ma'un", "An-Nasr"],
+            correctAnswer: "Al-Kautsar"
+          }];
+        }
+      };
+
+      // ==========================================
+      // 4. COMPONENTS
+      // ==========================================
+
+      const Button = ({ children, variant = 'primary', size = 'md', fullWidth = false, className = '', onClick, ...props }) => {
+        const baseStyles = "inline-flex items-center justify-center rounded-xl font-bold transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed transform active:scale-95";
+        const variants = {
+          primary: "bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-200 focus:ring-emerald-500",
+          secondary: "bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-200 focus:ring-amber-500",
+          outline: "border-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50 focus:ring-emerald-500",
+          danger: "bg-red-500 hover:bg-red-600 text-white focus:ring-red-500"
+        };
+        const sizes = { sm: "px-4 py-2 text-sm", md: "px-6 py-3 text-base", lg: "px-8 py-4 text-lg" };
+
+        const handleClick = (e) => {
+          audioService.playClick();
+          if (onClick) onClick(e);
+        };
+
+        return (
+          <button className={`${baseStyles} ${variants[variant]} ${sizes[size]} ${fullWidth ? 'w-full' : ''} ${className}`} onClick={handleClick} {...props}>
+            {children}
+          </button>
+        );
+      };
+
+      const LoadingSpinner = () => (
+        <div className="flex flex-col items-center justify-center space-y-4">
+          <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div>
+          <p className="text-emerald-700 font-medium animate-pulse">Menyiapkan pertanyaan dengan AI...</p>
+        </div>
+      );
+
+      const ResultScreen = ({ score, totalPoints, correctCount, totalQuestions, onRestart }) => {
+        const [advice, setAdvice] = useState("");
+        useEffect(() => {
+          setAdvice(ADVICE_LIST[Math.floor(Math.random() * ADVICE_LIST.length)]);
+        }, []);
+        const percentage = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
+        const stars = percentage >= 80 ? 3 : percentage >= 50 ? 2 : 1;
+
+        return (
+          <div className="w-full max-w-md mx-auto bg-white rounded-3xl shadow-xl overflow-hidden animate-in fade-in zoom-in duration-500 relative z-20">
+            <div className="bg-emerald-600 p-8 text-center relative overflow-hidden">
+               <h2 className="text-emerald-100 font-bold uppercase tracking-wider text-sm mb-2 relative z-10">Nilai Akhir</h2>
+               <div className="text-6xl font-extrabold text-white mb-4 relative z-10">{percentage}%</div>
+               <div className="flex justify-center gap-2 mb-4 relative z-10">
+                 {[...Array(3)].map((_, i) => (
+                   <Star key={i} className={`w-10 h-10 ${i < stars ? 'fill-amber-400 text-amber-400' : 'fill-emerald-800 text-emerald-800'}`} />
+                 ))}
+               </div>
+            </div>
+            <div className="p-8 space-y-6">
+               <div className="flex justify-center text-center">
+                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 w-full">
+                    <p className="text-slate-500 text-sm mb-1 uppercase tracking-wide">Jawaban Benar</p>
+                    <p className="text-3xl font-extrabold text-emerald-600">{correctCount} <span className="text-slate-400 text-lg font-normal">/ {totalQuestions}</span></p>
+                 </div>
+               </div>
+               <div className="bg-amber-50 border border-amber-100 rounded-xl p-5">
+                  <h3 className="text-amber-800 font-bold text-sm uppercase mb-2 flex items-center gap-2"><span className="w-1 h-1 bg-amber-500 rounded-full"></span> Nasihat Untukmu</h3>
+                  <p className="text-amber-900 italic leading-relaxed text-sm md:text-base">"{advice}"</p>
+               </div>
+               <Button onClick={onRestart} fullWidth variant="primary" className="flex items-center gap-2"><RefreshCw size={20} /> Ke Menu Utama</Button>
+            </div>
+          </div>
+        );
+      };
+
+      const QuestionCard = ({ question, onAnswer, onSurrender, totalQuestions, currentIndex }) => {
+        const [selectedOption, setSelectedOption] = useState(null);
+        const [hasSubmitted, setHasSubmitted] = useState(false);
+        const [timeLeft, setTimeLeft] = useState(20);
+
+        useEffect(() => {
+          setSelectedOption(null);
+          setHasSubmitted(false);
+          setTimeLeft(20);
+        }, [question.id]);
+
+        useEffect(() => {
+          if (hasSubmitted || timeLeft <= 0) return;
+          const timerId = setInterval(() => {
+            setTimeLeft((prev) => {
+              if (prev <= 1) {
+                clearInterval(timerId);
+                handleTimeOut();
+                return 0;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+          return () => clearInterval(timerId);
+        }, [timeLeft, hasSubmitted]);
+
+        const handleTimeOut = () => {
+          if (hasSubmitted) return;
+          setHasSubmitted(true);
+          audioService.playWrong();
+          setTimeout(() => onAnswer(false), 2000);
+        };
+
+        const handleSelect = (option) => {
+          if (hasSubmitted) return;
+          audioService.playClick();
+          setSelectedOption(option);
+        };
+
+        const handleSubmit = () => {
+          if (!selectedOption || hasSubmitted) return;
+          setHasSubmitted(true);
+          let isCorrect = false;
+          if (question.type === QuestionType.COMPLETE_VERSE) {
+            isCorrect = selectedOption === question.hiddenPart;
+          } else {
+            isCorrect = selectedOption === question.correctAnswer;
+          }
+          if (isCorrect) audioService.playCorrect();
+          else audioService.playWrong();
+          setTimeout(() => onAnswer(isCorrect), 1500);
+        };
+
+        const renderContent = () => {
+          if (question.type === QuestionType.COMPLETE_VERSE) {
+            return (
+              <div className="space-y-8">
+                <div className="bg-emerald-50 p-8 rounded-2xl border border-emerald-100 text-center shadow-inner flex flex-wrap justify-center items-center gap-4 leading-[3]" dir="rtl">
+                  {question.versePart1 && <span className="font-arabic text-2xl md:text-4xl text-emerald-900 leading-[3]">{question.versePart1}</span>}
+                  <div className={`min-w-[100px] h-14 border-b-4 border-dashed mx-2 flex items-center justify-center px-4 rounded transition-colors ${hasSubmitted ? (selectedOption === question.hiddenPart ? 'bg-green-100 border-green-500' : 'bg-red-100 border-red-500') : 'border-emerald-300 bg-white/50'}`}>
+                     {selectedOption ? <span className="font-arabic text-xl md:text-3xl text-emerald-800">{selectedOption}</span> : <span className="text-emerald-300 text-sm">?</span>}
+                  </div>
+                  {question.versePart2 && <span className="font-arabic text-2xl md:text-4xl text-emerald-900 leading-[3]">{question.versePart2}</span>}
+                </div>
+                <div className="grid grid-cols-2 gap-4" dir="rtl">
+                  {question.options.map((opt, idx) => (
+                    <button key={idx} onClick={() => handleSelect(opt)} disabled={hasSubmitted} className={`p-4 rounded-xl border-2 text-xl md:text-2xl font-arabic transition-all py-6 ${selectedOption === opt && !hasSubmitted ? 'border-amber-500 bg-amber-50 text-amber-900' : hasSubmitted && opt === question.hiddenPart ? 'border-emerald-500 bg-emerald-500 text-white' : hasSubmitted && opt === selectedOption && opt !== question.hiddenPart ? 'border-red-500 bg-red-500 text-white' : 'border-slate-200 bg-white hover:border-emerald-300 text-slate-800'}`}>
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          } else {
+            return (
+              <div className="space-y-6">
+                {question.arabicText && (
+                  <div className="bg-emerald-50 p-6 md:p-8 rounded-2xl border border-emerald-100 text-center shadow-inner">
+                    <p className="font-arabic text-3xl md:text-5xl leading-[2.5] md:leading-[3] text-emerald-900 mb-2 drop-shadow-sm" dir="rtl">{question.arabicText}</p>
+                  </div>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {question.options.map((opt, idx) => {
+                    let btnVariant = 'outline';
+                    if (hasSubmitted) {
+                       if (opt === question.correctAnswer) btnVariant = 'primary';
+                       else if (opt === selectedOption) btnVariant = 'danger';
+                    } else if (selectedOption === opt) btnVariant = 'primary';
+                    
+                    const btnClass = btnVariant === 'primary' ? 'border-emerald-600 bg-emerald-600 text-white' : btnVariant === 'danger' ? 'border-red-500 bg-red-500 text-white' : 'border-emerald-200 bg-white hover:border-emerald-500 hover:bg-emerald-50 text-slate-700';
+                    return (
+                      <button key={idx} onClick={() => handleSelect(opt)} disabled={hasSubmitted} className={`p-4 rounded-xl border-2 text-lg font-semibold transition-all relative overflow-hidden ${btnClass}`}>
+                        <div className="flex items-center justify-between relative z-10">
+                            <span>{opt}</span>
+                            {hasSubmitted && opt === question.correctAnswer && <CheckCircle size={20} />}
+                            {hasSubmitted && opt === selectedOption && opt !== question.correctAnswer && <XCircle size={20} />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          }
+        };
+
+        return (
+          <div className="w-full max-w-2xl mx-auto relative z-10">
+            <div className="flex items-center justify-between mb-2">
+               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Level {question.difficultyLevel || currentIndex + 1}</span>
+               <button onClick={onSurrender} className="flex items-center gap-1 text-red-500 hover:text-red-700 text-sm font-semibold px-3 py-1 rounded-full hover:bg-red-50 transition-colors"><Flag size={14} /> Menyerah</button>
+            </div>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl md:text-2xl font-bold text-slate-800 leading-tight flex-1 mr-4">{question.questionText}</h2>
+              <div className="relative w-14 h-14 flex items-center justify-center flex-shrink-0">
+                   <div className={`text-lg font-bold ${timeLeft <= 5 ? 'text-red-500' : 'text-emerald-600'}`}>{timeLeft}</div>
+              </div>
+            </div>
+            <div className="w-full h-1.5 bg-slate-100 rounded-full mb-6 overflow-hidden">
+              <div className={`h-full transition-all duration-1000 ease-linear ${timeLeft > 10 ? 'bg-emerald-500' : timeLeft > 5 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${(timeLeft / 20) * 100}%` }} />
+            </div>
+            {renderContent()}
+            <div className="mt-8">
+              {!hasSubmitted ? (
+                  <Button onClick={handleSubmit} fullWidth disabled={!selectedOption} variant="primary">Jawab</Button>
+              ) : (
+                  <div className={`text-center font-bold text-lg p-3 rounded-xl ${timeLeft === 0 && !selectedOption ? 'bg-red-100 text-red-700' : (selectedOption === (question.correctAnswer || question.hiddenPart) ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700')}`}>
+                      {timeLeft === 0 && !selectedOption ? 'Waktu Habis!' : (selectedOption === (question.correctAnswer || question.hiddenPart) ? 'Jawaban Benar!' : 'Jawaban Salah')}
+                  </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      // ==========================================
+      // 5. MAIN APP
+      // ==========================================
+
+      const App = () => {
+        const [gameState, setGameState] = useState('MENU');
+        const [questions, setQuestions] = useState([]);
+        const [currentIndex, setCurrentIndex] = useState(0);
+        const [score, setScore] = useState(0);
+        const [correctCount, setCorrectCount] = useState(0);
+        const [isMuted, setIsMuted] = useState(false);
+        const [countdown, setCountdown] = useState(3);
+
+        const toggleMute = () => {
+            const newState = audioService.toggleMute();
+            setIsMuted(newState);
+        };
+
+        useEffect(() => {
+          let timer;
+          if (gameState === 'COUNTDOWN') {
+              audioService.playTick(); 
+              timer = setInterval(() => {
+                  setCountdown((prev) => {
+                      if (prev <= 1) {
+                          clearInterval(timer);
+                          audioService.playCorrect(); 
+                          setTimeout(() => setGameState('PLAYING'), 500); 
+                          return 0; 
+                      }
+                      audioService.playTick();
+                      return prev - 1;
+                  });
+              }, 1000);
+          }
+          return () => clearInterval(timer);
+        }, [gameState]);
+
+        useEffect(() => {
+            if (gameState === 'FINISHED') setTimeout(() => audioService.playWin(), 500);
+        }, [gameState]);
+
+        const startGame = async (mode) => {
+          audioService.playClick();
+          setGameState('LOADING');
+          const data = await generateQuizQuestions(mode);
+          setQuestions(data);
+          setCurrentIndex(0);
+          setScore(0);
+          setCorrectCount(0);
+          setCountdown(3);
+          setGameState(data.length > 0 ? 'COUNTDOWN' : 'MENU');
+        };
+
+        const handleAnswer = (isCorrect) => {
+          if (isCorrect) {
+              setScore(prev => prev + questions[currentIndex].points);
+              setCorrectCount(prev => prev + 1);
+          }
+          if (currentIndex < questions.length - 1) setCurrentIndex(prev => prev + 1);
+          else setGameState('FINISHED');
+        };
+
+        const resetGame = () => {
+            audioService.playClick();
+            setGameState('MENU');
+            setQuestions([]);
+        };
+
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-amber-50 flex flex-col font-sans relative overflow-hidden">
+            {/* Background Decor */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
+                <div className="font-arabic text-emerald-100 text-9xl absolute top-20 left-[10%] opacity-20 animate-float delay-1000">ا</div>
+                <div className="font-arabic text-emerald-100 text-8xl absolute bottom-40 right-[15%] opacity-20 animate-float delay-2000">س</div>
+                <div className="font-arabic text-amber-100 text-9xl absolute top-40 right-[20%] opacity-20 animate-float delay-3000">م</div>
+            </div>
+
+            {/* Header */}
+            <header className="px-6 py-4 flex justify-between items-center bg-white/80 backdrop-blur-md sticky top-0 z-50 border-b border-emerald-100 shadow-sm">
+              <div className="flex items-center gap-2 cursor-pointer relative z-50 group" onClick={resetGame}>
+                  <div className="bg-emerald-600 p-2 rounded-lg text-white group-hover:bg-emerald-700 transition-colors"><BookOpen size={24} /></div>
+                  <h1 className="text-xl font-bold text-emerald-900 hidden md:block">Quran Quiz</h1>
+              </div>
+              <div className="flex items-center gap-4 relative z-50">
+                   {gameState === 'PLAYING' && (
+                       <div className="px-4 py-2 bg-emerald-50 rounded-full border border-emerald-100">
+                           <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-2">Soal</span>
+                           <span className="text-lg font-bold text-emerald-600">{currentIndex + 1}</span>
+                           <span className="text-slate-400 font-medium">/{questions.length}</span>
+                       </div>
+                   )}
+                   <button onClick={toggleMute} className="p-2 rounded-full hover:bg-slate-100 text-slate-600 transition-colors">
+                       {isMuted ? <VolumeX size={24} /> : <Volume2 size={24} />}
+                   </button>
+              </div>
+            </header>
+
+            <main className="flex-1 container mx-auto px-4 py-8 flex flex-col items-center justify-center relative z-10">
+              {gameState === 'MENU' && (
+                <div className="w-full max-w-4xl animate-in slide-in-from-bottom-10 fade-in duration-700 flex flex-col items-center">
+                  <h1 className="mt-4 text-5xl md:text-6xl font-extrabold text-emerald-900 tracking-tight drop-shadow-sm font-sans mb-10">Quran Quiz</h1>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
+                      <div onClick={() => startGame('TEBAK_SURAT')} className="group bg-white p-6 rounded-2xl border-2 border-emerald-100 hover:border-emerald-500 hover:shadow-xl transition-all cursor-pointer relative overflow-hidden">
+                          <div className="flex items-center gap-4 mb-4 relative z-10">
+                              <div className="bg-emerald-100 text-emerald-600 p-3 rounded-xl"><Search size={28} /></div>
+                              <h3 className="text-xl font-bold text-slate-800">Tebak Surat & Ayat</h3>
+                          </div>
+                          <p className="text-slate-500 text-sm relative z-10">Identifikasi nama surat dari potongan ayat atau sebaliknya.</p>
+                      </div>
+                      <div onClick={() => startGame('LENGKAPI_AYAT')} className="group bg-white p-6 rounded-2xl border-2 border-emerald-100 hover:border-emerald-500 hover:shadow-xl transition-all cursor-pointer relative overflow-hidden">
+                          <div className="flex items-center gap-4 mb-4 relative z-10">
+                              <div className="bg-amber-100 text-amber-600 p-3 rounded-xl"><Grid size={28} /></div>
+                              <h3 className="text-xl font-bold text-slate-800">Lengkapi Ayat</h3>
+                          </div>
+                          <p className="text-slate-500 text-sm relative z-10">Isi bagian yang hilang dari ayat-ayat pilihan.</p>
+                      </div>
+                      <div onClick={() => startGame('ILMU_TAJWID')} className="group bg-white p-6 rounded-2xl border-2 border-emerald-100 hover:border-emerald-500 hover:shadow-xl transition-all cursor-pointer relative overflow-hidden">
+                          <div className="flex items-center gap-4 mb-4 relative z-10">
+                              <div className="bg-blue-100 text-blue-600 p-3 rounded-xl"><Mic size={28} /></div>
+                              <h3 className="text-xl font-bold text-slate-800">Tajwid & Ilmu Quran</h3>
+                          </div>
+                          <p className="text-slate-500 text-sm relative z-10">Tes wawasan tentang hukum tajwid dan makharijul huruf.</p>
+                      </div>
+                      <div onClick={() => startGame('ARTI_KATA')} className="group bg-white p-6 rounded-2xl border-2 border-emerald-100 hover:border-emerald-500 hover:shadow-xl transition-all cursor-pointer relative overflow-hidden">
+                          <div className="flex items-center gap-4 mb-4 relative z-10">
+                              <div className="bg-purple-100 text-purple-600 p-3 rounded-xl"><Book size={28} /></div>
+                              <h3 className="text-xl font-bold text-slate-800">Arti Kata</h3>
+                          </div>
+                          <p className="text-slate-500 text-sm relative z-10">Terjemahkan kosakata Bahasa Arab ke Bahasa Indonesia.</p>
+                      </div>
+                  </div>
+                </div>
+              )}
+
+              {gameState === 'LOADING' && <LoadingSpinner />}
+
+              {gameState === 'COUNTDOWN' && (
+                <div className="flex items-center justify-center animate-in zoom-in duration-300 relative z-50">
+                   <h1 className="text-8xl md:text-9xl font-black text-emerald-600 relative z-10 drop-shadow-2xl">{countdown > 0 ? countdown : "Mulai!"}</h1>
+                </div>
+              )}
+
+              {gameState === 'PLAYING' && questions.length > 0 && (
+                <div className="w-full animate-in fade-in duration-500">
+                   <QuestionCard 
+                      key={questions[currentIndex].id}
+                      question={questions[currentIndex]} 
+                      onAnswer={handleAnswer} 
+                      onSurrender={() => setGameState('FINISHED')}
+                      totalQuestions={questions.length}
+                      currentIndex={currentIndex}
+                   />
+                </div>
+              )}
+
+              {gameState === 'FINISHED' && (
+                <ResultScreen 
+                  score={score} 
+                  totalPoints={questions.reduce((acc, q) => acc + q.points, 0)}
+                  correctCount={correctCount}
+                  totalQuestions={questions.length}
+                  onRestart={resetGame}
+                />
+              )}
+            </main>
+          </div>
+        );
+      };
+
+      const root = createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>

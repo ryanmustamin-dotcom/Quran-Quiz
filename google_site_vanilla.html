@@ -1,0 +1,323 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Quran Quiz Lite</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Nunito', sans-serif; background-color: #f8fafc; user-select: none; -webkit-tap-highlight-color: transparent; }
+        .font-arabic { font-family: 'Amiri', serif; }
+        .btn-press:active { transform: scale(0.95); }
+        /* Animasi Transisi */
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen text-slate-800 overflow-hidden">
+
+    <!-- Container Utama -->
+    <div id="app" class="flex-1 flex flex-col max-w-md mx-auto w-full bg-white h-screen shadow-xl relative overflow-hidden">
+        <!-- Konten akan dirender di sini oleh JavaScript -->
+    </div>
+
+    <script>
+        // ==========================================
+        // KONFIGURASI
+        // ==========================================
+        const API_KEY = "GANTI_DENGAN_API_KEY_ANDA"; // Ganti dengan API Key Gemini Anda
+
+        // State Global
+        const state = {
+            view: 'MENU', // MENU, LOADING, GAME, RESULT
+            questions: [],
+            currentIndex: 0,
+            score: 0,
+            correctCount: 0,
+            isMuted: false,
+            audioCtx: null
+        };
+
+        // ==========================================
+        // AUDIO SYSTEM (Simple & Safe)
+        // ==========================================
+        const AudioSys = {
+            init: function() {
+                if (!state.audioCtx) {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    if (Ctx) state.audioCtx = new Ctx();
+                }
+                if (state.audioCtx && state.audioCtx.state === 'suspended') {
+                    state.audioCtx.resume();
+                }
+            },
+            play: function(type) {
+                if (state.isMuted || !state.audioCtx) return;
+                try {
+                    const osc = state.audioCtx.createOscillator();
+                    const gain = state.audioCtx.createGain();
+                    const now = state.audioCtx.currentTime;
+
+                    if (type === 'click') {
+                        osc.frequency.setValueAtTime(600, now);
+                        osc.type = 'triangle';
+                        osc.start(now);
+                        osc.stop(now + 0.05);
+                    } else if (type === 'correct') {
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(523.25, now);
+                        osc.frequency.setValueAtTime(783.99, now + 0.1);
+                        osc.start(now);
+                        osc.stop(now + 0.2);
+                    } else if (type === 'wrong') {
+                        osc.type = 'sawtooth';
+                        osc.frequency.setValueAtTime(150, now);
+                        osc.frequency.linearRampToValueAtTime(100, now + 0.2);
+                        osc.start(now);
+                        osc.stop(now + 0.3);
+                    }
+                    
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.linearRampToValueAtTime(0.01, now + (type === 'wrong' ? 0.3 : 0.2));
+                    osc.connect(gain);
+                    gain.connect(state.audioCtx.destination);
+                } catch(e) { console.log(e); }
+            }
+        };
+
+        // ==========================================
+        // GEMINI API
+        // ==========================================
+        async function fetchQuestions(mode) {
+            // Data Fallback jika API Key salah atau Error
+            const fallback = [
+                {
+                    type: "GUESS_SURAH",
+                    questionText: "Potongan ayat berikut terdapat dalam surat apa?",
+                    versePart1: "إِنَّا أَعْطَيْنَاكَ الْكَوْثَرَ",
+                    options: ["Al-Ikhlas", "Al-Kautsar", "Al-Ma'un", "An-Nasr"],
+                    correctAnswer: "Al-Kautsar"
+                },
+                {
+                    type: "COMPLETE_VERSE",
+                    questionText: "Lengkapi ayat berikut:",
+                    versePart1: "قُلْ هُوَ ٱللَّهُ",
+                    hiddenPart: "أَحَدٌ",
+                    options: ["أَحَدٌ", "الصَّمَدُ", "يُولَدْ", "كُفُوًا"],
+                    correctAnswer: "أَحَدٌ"
+                }
+            ];
+
+            if(!API_KEY || API_KEY.includes("GANTI")) return fallback;
+
+            const prompt = `
+                Buatkan 5 soal kuis Al-Quran (Mode: ${mode}).
+                Format JSON: { "questions": [{ "questionText": "Indonesian", "versePart1": "Arabic", "versePart2": "Arabic(optional)", "options": ["A","B","C","D"], "correctAnswer": "String" }] }
+            `;
+
+            try {
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                const data = await res.json();
+                const text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, '').trim();
+                return JSON.parse(text).questions;
+            } catch (e) {
+                console.error(e);
+                return fallback;
+            }
+        }
+
+        // ==========================================
+        // RENDER ENGINE
+        // ==========================================
+        const app = document.getElementById('app');
+
+        function render() {
+            app.innerHTML = '';
+            
+            if (state.view === 'MENU') renderMenu();
+            else if (state.view === 'LOADING') renderLoading();
+            else if (state.view === 'GAME') renderGame();
+            else if (state.view === 'RESULT') renderResult();
+        }
+
+        function renderMenu() {
+            app.innerHTML = `
+                <div class="flex flex-col items-center justify-center h-full p-6 bg-slate-50 fade-in">
+                    <h1 class="text-4xl font-extrabold text-emerald-700 mb-2">Quran Quiz</h1>
+                    <div class="h-1 w-20 bg-amber-400 rounded-full mb-8"></div>
+                    
+                    <div class="w-full space-y-3">
+                        ${createMenuBtn('Tebak Surat', '🔍', 'TEBAK_SURAT', 'emerald')}
+                        ${createMenuBtn('Lengkapi Ayat', '🧩', 'LENGKAPI_AYAT', 'amber')}
+                        ${createMenuBtn('Tajwid', '🎤', 'ILMU_TAJWID', 'blue')}
+                        ${createMenuBtn('Arti Kata', '📖', 'ARTI_KATA', 'purple')}
+                    </div>
+                    <p class="mt-8 text-xs text-slate-400">Versi Ringan (Vanilla JS)</p>
+                </div>
+            `;
+        }
+
+        function createMenuBtn(title, icon, mode, color) {
+            const colors = {
+                emerald: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+                amber: 'bg-amber-100 text-amber-700 border-amber-200',
+                blue: 'bg-blue-100 text-blue-700 border-blue-200',
+                purple: 'bg-purple-100 text-purple-700 border-purple-200'
+            };
+            return `
+                <button onclick="startGame('${mode}')" class="w-full flex items-center p-4 rounded-xl border-2 ${colors[color]} hover:opacity-80 transition-all btn-press">
+                    <span class="text-2xl mr-4">${icon}</span>
+                    <span class="font-bold text-lg">${title}</span>
+                </button>
+            `;
+        }
+
+        function renderLoading() {
+            app.innerHTML = `
+                <div class="flex flex-col items-center justify-center h-full fade-in">
+                    <div class="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mb-4"></div>
+                    <p class="text-emerald-700 font-bold animate-pulse">Menyiapkan Soal...</p>
+                </div>
+            `;
+        }
+
+        function renderGame() {
+            const q = state.questions[state.currentIndex];
+            const progress = ((state.currentIndex + 1) / state.questions.length) * 100;
+
+            app.innerHTML = `
+                <div class="flex flex-col h-full bg-slate-50 fade-in">
+                    <!-- Header -->
+                    <div class="bg-white p-4 shadow-sm flex justify-between items-center z-10">
+                        <button onclick="goHome()" class="text-sm font-bold text-slate-400">Keluar</button>
+                        <span class="text-emerald-600 font-bold">Soal ${state.currentIndex + 1}/${state.questions.length}</span>
+                        <button onclick="toggleMute()" class="text-xl">${state.isMuted ? '🔇' : '🔊'}</button>
+                    </div>
+                    <div class="w-full h-1.5 bg-slate-200"><div class="h-full bg-emerald-500 transition-all duration-500" style="width: ${progress}%"></div></div>
+
+                    <!-- Soal -->
+                    <div class="flex-1 overflow-y-auto p-4 flex flex-col items-center">
+                        <h2 class="text-lg font-bold text-slate-800 text-center mb-6">${q.questionText}</h2>
+                        
+                        ${q.versePart1 ? `
+                            <div class="w-full bg-white border border-emerald-100 rounded-2xl p-6 mb-6 shadow-sm text-center">
+                                <p class="font-arabic text-3xl leading-loose text-emerald-900" dir="rtl">
+                                    ${q.versePart1} 
+                                    ${q.hiddenPart ? '<span class="text-amber-500 mx-1">...</span>' : ''}
+                                    ${q.versePart2 || ''}
+                                </p>
+                            </div>
+                        ` : ''}
+
+                        <!-- Opsi Jawaban -->
+                        <div class="w-full space-y-3 pb-8">
+                            ${q.options.map(opt => `
+                                <button onclick="checkAnswer(this, '${opt}')" class="w-full p-4 bg-white border-2 border-slate-200 rounded-xl font-arabic text-xl font-semibold text-slate-700 hover:bg-emerald-50 hover:border-emerald-300 transition-all btn-press relative overflow-hidden" dir="rtl">
+                                    ${opt}
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderResult() {
+            const scorePercent = Math.round((state.score / (state.questions.length * 10)) * 100);
+            const advice = "Bacalah Al-Qur'an, karena ia akan datang memberi syafaat di hari kiamat.";
+            
+            app.innerHTML = `
+                <div class="flex flex-col items-center justify-center h-full p-6 bg-emerald-600 text-white text-center fade-in">
+                    <h2 class="text-sm font-bold uppercase tracking-widest mb-2 opacity-80">Nilai Akhir</h2>
+                    <div class="text-7xl font-black mb-4">${scorePercent}</div>
+                    <div class="flex gap-2 mb-8 text-3xl text-yellow-400">
+                        ${scorePercent >= 40 ? '★' : '☆'}${scorePercent >= 70 ? '★' : '☆'}${scorePercent >= 90 ? '★' : '☆'}
+                    </div>
+                    
+                    <div class="bg-white/10 p-6 rounded-xl backdrop-blur-sm border border-white/20 mb-8">
+                        <p class="italic font-serif leading-relaxed">"${advice}"</p>
+                    </div>
+
+                    <button onclick="goHome()" class="w-full py-4 bg-white text-emerald-700 rounded-xl font-bold shadow-lg hover:bg-emerald-50 btn-press">
+                        Main Lagi
+                    </button>
+                </div>
+            `;
+        }
+
+        // ==========================================
+        // LOGIC & CONTROLLER
+        // ==========================================
+        function startGame(mode) {
+            AudioSys.init();
+            AudioSys.play('click');
+            state.view = 'LOADING';
+            render();
+
+            fetchQuestions(mode).then(qs => {
+                state.questions = qs.map(q => ({...q, correctAnswer: q.correctAnswer || q.hiddenPart}));
+                state.currentIndex = 0;
+                state.score = 0;
+                state.correctCount = 0;
+                state.view = 'GAME';
+                render();
+            });
+        }
+
+        function checkAnswer(btn, answer) {
+            if (btn.disabled) return;
+            
+            // Disable all buttons
+            const btns = document.querySelectorAll('#app button');
+            btns.forEach(b => b.disabled = true);
+
+            const q = state.questions[state.currentIndex];
+            const isCorrect = answer === q.correctAnswer;
+
+            if (isCorrect) {
+                btn.classList.remove('bg-white', 'border-slate-200', 'text-slate-700');
+                btn.classList.add('bg-emerald-500', 'border-emerald-500', 'text-white');
+                AudioSys.play('correct');
+                state.score += 10;
+                state.correctCount++;
+            } else {
+                btn.classList.remove('bg-white', 'border-slate-200', 'text-slate-700');
+                btn.classList.add('bg-red-500', 'border-red-500', 'text-white');
+                AudioSys.play('wrong');
+            }
+
+            setTimeout(() => {
+                if (state.currentIndex < state.questions.length - 1) {
+                    state.currentIndex++;
+                    renderGame();
+                } else {
+                    state.view = 'RESULT';
+                    AudioSys.play('correct'); // Win sound
+                    render();
+                }
+            }, 1000);
+        }
+
+        function goHome() {
+            state.view = 'MENU';
+            AudioSys.play('click');
+            render();
+        }
+
+        function toggleMute() {
+            state.isMuted = !state.isMuted;
+            render();
+        }
+
+        // Init First Render
+        render();
+
+    </script>
+</body>
+</html>
